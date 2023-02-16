@@ -14,7 +14,7 @@ class FeatureExtractor(nn.Module):
     def __init__(self):
         super().__init__()
         # NOTICE: I wanna keep feature map as the same size with input
-        self.encoder = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, padding=1)
+        self.encoder = nn.Conv2d(in_channels=3, out_channels=8, kernel_size=3, stride=4, padding=1)
     def forward(self, image):
         # argument 'image' contains only 1 image
         return self.encoder(image)
@@ -22,7 +22,7 @@ class FeatureExtractor(nn.Module):
 class VolumeReg(nn.Module):
     def __init__(self):
         super().__init__()
-        self.reg = nn.Conv3d(8, 1, 3)
+        self.reg = nn.Conv3d(8, 1, 3, padding=1)
     def forward(self, cost_volume):
         return self.reg(cost_volume)
 
@@ -35,16 +35,18 @@ class VolumeReg(nn.Module):
 # Output:
 # cost_volume: [batch_size, D, channels, H, W]
 def homography_mapping(features, extrinsics, intrinsics, depth_values, nviews):
+    # print("depth_values: {}".format(depth_values))
+    # print("depth_values.shape: {}".format(depth_values.shape))
     ref_feature, src_features = features[0], features[1:]
     ref_proj, src_projs = extrinsics[0], extrinsics[1:]
-    ref_intrinsic = intrinsics[0]
+    ref_intrinsic, src_intrinsics = intrinsics[0], intrinsics[1:]
     ref_rotation, ref_trans = ref_proj[:, :3, :3], ref_proj[:, :3, 3]
     batch_size, channels_num, H, W = ref_feature.shape[0], ref_feature.shape[1], ref_feature.shape[2], ref_feature.shape[3]
     # FIXME: ref volume
-    volume = torch.empty([batch_size, len(depth_values), channels_num, H, W]).to(ref_feature.device)
-    volume_sum = torch.empty([batch_size, len(depth_values), channels_num, H, W]).to(ref_feature.device)
-    volume_square = torch.empty([batch_size, len(depth_values), channels_num, H, W]).to(ref_feature.device)
-    for src_fea, src_proj in zip(src_features, src_projs):
+    volume = torch.empty([batch_size, depth_values.shape[1], channels_num, H, W]).to(ref_feature.device)
+    volume_sum = torch.empty([batch_size, depth_values.shape[1], channels_num, H, W]).to(ref_feature.device)
+    volume_square = torch.empty([batch_size, depth_values.shape[1], channels_num, H, W]).to(ref_feature.device)
+    for src_fea, src_proj, src_intrinsic in zip(src_features, src_projs, src_intrinsics):
         # src_rotation: [batch_size, 3, 3], src_trans: [batch_size, 3, 1]
         src_rotation, src_trans = src_proj[:, :3, :3], src_proj[:, :3, 3]
         relative_rotation = torch.matmul(torch.inverse(src_rotation), ref_rotation)
@@ -57,18 +59,22 @@ def homography_mapping(features, extrinsics, intrinsics, depth_values, nviews):
         
         i = 0
         for depth in depth_values[0]:
-            src_intrinsic = intrinsics[i]
             Homo = torch.matmul(torch.matmul(src_intrinsic, relative_rotation + torch.transpose(relative_rotation, 1, 2) * relative_trans * normal_T / depth), torch.inverse(ref_intrinsic))
             print("Homo", Homo.shape) # the shape of Homo should be [3, 3], freedom of 8
-            grid = torch.empty(batch_size, H, W, 2).to(ref_feature.device)
-            for x in range(H):
-                print(x)
-                for y in range(W):
-                    tmp = Homo[:, 2, 0]*x + Homo[:, 2, 1]*y + Homo[:, 2, 2]
-                    u, v = (Homo[:, 0, 0]*x + Homo[:, 0, 1]*y + Homo[:, 0, 2]) / tmp , (Homo[:, 1, 0]*x + Homo[:, 1, 1]*y + Homo[:, 1, 2]) / tmp
-                    u_norm, v_norm = 2 * u / H - 1, 2 * v / W - 1
-                    grid[:, x, y] = torch.Tensor([u_norm , v_norm])
+            y, x = torch.meshgrid([torch.arange(0, H, dtype=torch.float32, device=ref_feature.device),
+                                    torch.arange(0, W, dtype=torch.float32, device=ref_feature.device)])
+            y, x = y.contiguous(), x.contiguous()
+            y, x = y.view(H * W), x.view(H * W)
+            xyz = torch.stack((x, y, torch.ones_like(x))) # torch.Size([3, 327680])
+            proj_xyz = torch.matmul(torch.inverse(Homo), xyz) # [batch_size, 3, H*W]
+            proj_xy = proj_xyz[:, :2] / proj_xyz[:, 2]
+            proj_x_normalized = proj_xy[:, 0, :] / ((W - 1) / 2) - 1 # [batch_size, H*W]
+            proj_y_normalized = proj_xy[:, 1, :] / ((H - 1) / 2) - 1 # [batch_size, H*W]
+            grid = torch.stack((proj_x_normalized, proj_y_normalized), dim=2) # [batch_size, H*W, 2]
+            grid = grid.view(batch_size, H, W, 2)
             output = F.grid_sample(src_fea, grid)
+            print(output.shape)
+            print(volume.shape)
             volume[:, i] = output
             i += 1
         volume_sum += volume
@@ -79,7 +85,11 @@ def homography_mapping(features, extrinsics, intrinsics, depth_values, nviews):
 # probility_volume: [batch_size, D, H, W]
 # depth_values: [batch_size, D]
 def depth_regression(probility_volume, depth_values):
-    d = torch.Tensor(depth_values).view(probility_volume.shape[0], probility_volume.shape[1], 1, 1)
+    print(probility_volume.shape)
+    print(depth_values.shape)
+    print(probility_volume.device)
+    print(depth_values.device)
+    d = depth_values.view(probility_volume.shape[0], probility_volume.shape[1], 1, 1)
     depth = torch.sum(d * probility_volume, 1)
     return depth
 
@@ -128,8 +138,10 @@ class MVSVolume(pl.LightningModule):
         features = [self.FeatureExtractor(i) for i in imgs]
         nviews = len(imgs)
         cost_volume = homography_mapping(features, extrinsics, intrinsics, depth_values, nviews)
-        probility_volume = F.softmax(self.VolumeReg(cost_volume))
-        depth_map = depth_regression(probility_volume)
+        probility_volume = F.softmax(self.VolumeReg(cost_volume.transpose(1,2)).squeeze(1), dim=1)
+        depth_map = depth_regression(probility_volume, depth_values).transpose(1, 2)
+        print(depth_map.shape)
+        print(depth_gt.shape)
         loss = F.mse_loss(depth_map, depth_gt)
         return loss
     def configure_optimizers(self):

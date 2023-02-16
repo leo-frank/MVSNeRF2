@@ -12,7 +12,7 @@ class DTU_dataset(Dataset):
         # scans_list depends on mode
         with open(os.path.join(os.curdir, '{}_list.txt'.format(mode))) as f:
             self.scans_list = [i.strip() for i in f.readlines()]
-        self.depth_dir = os.path.join(data_dir, 'Depths')
+        self.depth_dir = os.path.join(data_dir, 'Depths_Raw')
         self.camera_dir = os.path.join(data_dir, 'Cameras')
         self.img_dir = os.path.join(data_dir, 'Rectified')
         self.nviews = nviews
@@ -69,7 +69,7 @@ class DTU_dataset(Dataset):
             intrinsics.append(intrinsic)
             extrinsics.append(extrinsic)
             if i == 0: # For reference image only
-                depth_values = np.arange(depth_min, depth_interval * 192 + depth_min, depth_interval)
+                depth_values = np.arange(depth_min, depth_interval * 48 + depth_min, depth_interval)
         ref_depth_filename = os.path.join(self.depth_dir, scan+'_train', 'depth_map_{:0>4}.pfm'.format(id))
         ref_depth = self.read_depth(ref_depth_filename)
         print("imgs[0].shape={}".format(imgs[0].shape))
