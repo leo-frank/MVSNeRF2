@@ -42,7 +42,7 @@ class DTU_dataset(Dataset):
         # depth_min & depth_interval: line 11
         depth_min = float(lines[11].split()[0])
         depth_interval = float(lines[11].split()[1])
-        return torch.Tensor(intrinsics), torch.Tensor(extrinsics), depth_min, depth_interval
+        return intrinsics, extrinsics, depth_min, depth_interval
     
     # Input: 
     def read_depth(self, filename):
@@ -61,6 +61,7 @@ class DTU_dataset(Dataset):
         imgs = []
         intrinsics = []
         extrinsics = []
+        proj_matrices = []
         for i, id in enumerate(view_ids):
             image_filename = os.path.join(self.img_dir, '{}_train/rect_{:0>3}_{}_r5000.png'.format(scan, id + 1, light_idx))
             imgs.append(self.read_image(image_filename))
@@ -68,17 +69,30 @@ class DTU_dataset(Dataset):
             intrinsic, extrinsic, depth_min, depth_interval = self.read_cam_file(proj_mat_filename)
             intrinsics.append(intrinsic)
             extrinsics.append(extrinsic)
+            # multiply intrinsics and extrinsics to get projection matrix
+            # print(type(extrinsic))
+            proj_mat = extrinsic.copy()
+            # print(type(proj_mat))
+            proj_mat[:3, :4] = np.matmul(intrinsic, proj_mat[:3, :4])
+            proj_matrices.append(proj_mat)
+
+
             if i == 0: # For reference image only
                 depth_values = np.arange(depth_min, depth_interval * 48 + depth_min, depth_interval)
+                maskname = os.path.join(self.depth_dir, scan+'_train', 'depth_visual_{:0>4}.png'.format(id))
+                mask = cv2.imread(maskname, cv2.IMREAD_GRAYSCALE) / 255 
+                mask = mask > 0.5
         ref_depth_filename = os.path.join(self.depth_dir, scan+'_train', 'depth_map_{:0>4}.pfm'.format(id))
         ref_depth = self.read_depth(ref_depth_filename)
-        print("imgs[0].shape={}".format(imgs[0].shape))
+        # print("imgs[0].shape={}".format(imgs[0].shape))
         return {
-            "imgs": torch.stack(imgs, 0), # contains 1 ref image and N source images
-            "intrinsics": torch.stack(intrinsics, 0), # contains 1 ref image and N source images
-            "extrinsics": torch.stack(extrinsics, 0), # contains 1 ref image and N source images
+            "imgs": np.stack(imgs, 0), # contains 1 ref image and N source images
+            "intrinsics": np.stack(intrinsics, 0), # contains 1 ref image and N source images
+            "extrinsics": np.stack(extrinsics, 0), # contains 1 ref image and N source images
+            "proj_matrices": np.stack(proj_matrices),
             "depth_gt": ref_depth, # only ground truth depth of ref image
-            "depth_values": torch.Tensor(depth_values) # a array of depth hypothesis
+            "depth_values": np.array(depth_values), # a array of depth hypothesis
+            "mask": mask
         }
 
     def __len__(self):
