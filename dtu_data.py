@@ -6,7 +6,7 @@ import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
 class DTU_dataset(Dataset):
-    def __init__(self, data_dir, mode, nviews):
+    def __init__(self, data_dir, mode, nviews, ndepths):
         super(DTU_dataset, self).__init__()
         assert mode in ['train', 'validate', 'test']
         # scans_list depends on mode
@@ -25,6 +25,7 @@ class DTU_dataset(Dataset):
                     src_views = [int(x) for x in f.readline().rstrip().split()[1::2]]
                     for light_idx in range(7):
                         self.pairs.append((scan, light_idx, ref_view, src_views))
+        self.ndepths = ndepths
     
     # output: [3, H, W]
     def read_image(self, filename):
@@ -78,12 +79,12 @@ class DTU_dataset(Dataset):
 
 
             if i == 0: # For reference image only
-                depth_values = np.arange(depth_min, depth_interval * 48 + depth_min, depth_interval)
+                depth_values = np.arange(depth_min, depth_interval * self.ndepths + depth_min, depth_interval)
                 maskname = os.path.join(self.depth_dir, scan+'_train', 'depth_visual_{:0>4}.png'.format(id))
                 mask = cv2.imread(maskname, cv2.IMREAD_GRAYSCALE) / 255 
                 mask = mask > 0.5
-        ref_depth_filename = os.path.join(self.depth_dir, scan+'_train', 'depth_map_{:0>4}.pfm'.format(id))
-        ref_depth = self.read_depth(ref_depth_filename)
+                ref_depth_filename = os.path.join(self.depth_dir, scan+'_train', 'depth_map_{:0>4}.pfm'.format(id))
+                ref_depth = self.read_depth(ref_depth_filename)
         # print("imgs[0].shape={}".format(imgs[0].shape))
         return {
             "imgs": np.stack(imgs, 0), # contains 1 ref image and N source images

@@ -169,6 +169,8 @@ def homography_mapping(features, extrinsics, intrinsics, depth_values, nviews):
 
 # probility_volume: [batch_size, D, H, W]
 # depth_values: [batch_size, D]
+# return
+# depth: [batch_size, 1, H, W]
 def depth_regression(probility_volume, depth_values):
     # print(probility_volume.shape)
     # print(depth_values.shape)
@@ -247,7 +249,7 @@ class MVSVolume(pl.LightningModule):
         self.FeatureExtractor = FeatureExtractor()
         self.VolumeReg = CostRegNet()
         self.training = True
-
+        # self.save_hyperparameters() # Track hyperparameters
     # batch consists of these:
     #   imgs: [batch_size, nviews, 3, 640, 512]
     #   intrinsics: [batch_size, nviews, 3, 3]
@@ -302,10 +304,23 @@ class MVSVolume(pl.LightningModule):
         depth_map = depth_regression(probility_volume, depth_values).transpose(1, 2)
         # print(depth_map.shape)
         # print(depth_gt.shape)
-        loss = F.smooth_l1_loss(depth_map[mask], depth_gt[mask]) # TODO: what loss function is better ?
-        return loss
+        print("depth_map.shape: {}".format(depth_map.shape))
+        loss = F.smooth_l1_loss(depth_map[mask], depth_gt[mask], size_average=True) # TODO: what loss function is better ?
+        self.logger.experiment.add_scalar("depth loss", loss, self.global_step)
+        if self.global_step % 5 == 0:
+            print("imgs[0][0].shape: {}", imgs[0][0].shape)
+            torch.save(imgs[0][0], "imgs[0][0].pt")
+            self.logger.experiment.add_image("reference image", imgs[0][0].transpose(1, 2), self.global_step )
+            self.logger.experiment.add_image("depth_gt", depth_gt[0], self.global_step, dataformats="HW")
+            self.logger.experiment.add_image("depth_map", (depth_map* mask)[0], self.global_step, dataformats="HW")
+        return {
+            'loss': loss
+        }
+    def training_epoch_end(self, outputs):
+        avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
+        self.logger.experiment.add_scalar('average loss per epoch', avg_loss, self.current_epoch)
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), weight_decay=0.0)
         return optimizer
     def validation_step():
         pass
@@ -316,18 +331,19 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Define a dataset
 batch_size = 1
-dataset = DTU_dataset(data_dir="./dtu_train/", mode='train', nviews=3)
-train_loader = DataLoader(dataset, batch_size, shuffle=True)
+dataset = DTU_dataset(data_dir="./dtu_train/", mode='train', nviews=3, ndepths=256)
+train_loader = DataLoader(dataset, batch_size, shuffle=True, num_workers=8, drop_last=True)
 print(len(dataset))
 
 # model
 model = MVSVolume()
 
 model.to(device)
- 
+from pytorch_lightning.loggers import TensorBoardLogger
 # Train the model
 if __name__ == '__main__':
     with torch.autograd.set_detect_anomaly(True):
         # imgs, intrinsics, extrinsics, ref_depth = dataset[0]
-        trainer = pl.Trainer(max_epochs=1, gpus=1)
+        tensorboard = TensorBoardLogger(save_dir = "./tb_logs/")
+        trainer = pl.Trainer(logger=tensorboard, max_epochs=1, gpus=1)
         trainer.fit(model, train_dataloader=train_loader)
