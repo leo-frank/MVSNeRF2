@@ -306,6 +306,7 @@ class MVSVolume(pl.LightningModule):
         # print(depth_map.shape)
         # print(depth_gt.shape)
         loss = F.smooth_l1_loss(depth_map[mask], depth_gt[mask], size_average=True) # TODO: what loss function is better ?
+        self.logger.experiment.add_scalar("depth loss", loss, self.global_step) # for consistent with pre 2 epoch
         self.logger.experiment.add_scalar("train/depth loss", loss, self.global_step)
         if self.global_step % 5 == 0:
             thres2mm_error = self.Thres_metrics(depth_map, depth_gt, mask > 0.5, 2)
@@ -364,16 +365,18 @@ batch_size = 1
 dataset = DTU_dataset(data_dir="./dtu_train/", mode='train', nviews=3, ndepths=256)
 train_loader = DataLoader(dataset, batch_size, shuffle=True, num_workers=8, drop_last=True)
 
-if args.resume:
-    model = MVSVolume.load_from_checkpoint('./tb_logs/default/version_17/checkpoints/epoch=1-step=54193.ckpt')
-else:
-    model = MVSVolume()
+
+model = MVSVolume()
 model.to(device)
 
 # Train the model
 if __name__ == '__main__':
     with torch.autograd.set_detect_anomaly(True):
         # imgs, intrinsics, extrinsics, ref_depth = dataset[0]
-        tensorboard = TensorBoardLogger(save_dir = "./tb_logs/")
-        trainer = pl.Trainer(logger=tensorboard, max_epochs=2, gpus=1)
+        if args.resume:
+            tensorboard = TensorBoardLogger(save_dir = "./tb_logs/", name='default', version='version_17')
+            trainer = pl.Trainer(logger=tensorboard, max_epochs=3, gpus=1, resume_from_checkpoint='./tb_logs/default/version_17/checkpoints/epoch=1-step=54193.ckpt')
+        else:
+            tensorboard = TensorBoardLogger(save_dir = "./tb_logs/")
+            trainer = pl.Trainer(logger=tensorboard, max_epochs=6, gpus=1) # train from scratch
         trainer.fit(model, train_dataloader=train_loader)
