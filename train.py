@@ -9,6 +9,9 @@ import pytorch_lightning as pl
 import cv2
 from dtu_data import DTU_dataset
 import copy
+from pytorch_lightning.loggers import TensorBoardLogger
+import argparse
+
 # Define torch modules
 class ConvBnReLU(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, pad=1):
@@ -350,6 +353,9 @@ class MVSVolume(pl.LightningModule):
             self.logger.experiment.add_image("test/depth_map", (depth_map* mask)[0], batch_idx, dataformats="HW")
         return None
         
+parser = argparse.ArgumentParser(description='A PyTorch Implementation of MVSNeRF')
+parser.add_argument('--resume', action='store_true', help='resume from lastest model')
+args = parser.parse_args()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -357,13 +363,13 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 batch_size = 1
 dataset = DTU_dataset(data_dir="./dtu_train/", mode='train', nviews=3, ndepths=256)
 train_loader = DataLoader(dataset, batch_size, shuffle=True, num_workers=8, drop_last=True)
-print(len(dataset))
 
-# model
-model = MVSVolume()
-
+if args.resume:
+    model = MVSVolume.load_from_checkpoint('./tb_logs/default/version_17/checkpoints/epoch=1-step=54193.ckpt')
+else:
+    model = MVSVolume()
 model.to(device)
-from pytorch_lightning.loggers import TensorBoardLogger
+
 # Train the model
 if __name__ == '__main__':
     with torch.autograd.set_detect_anomaly(True):
