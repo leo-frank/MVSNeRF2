@@ -258,13 +258,11 @@ class MVSVolume(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         # print(batch)
         imgs, intrinsics, extrinsics, proj_matrices, depth_gt, depth_values, mask= list(tocuda(batch).values())
-        torch.save(depth_values, "depth_values.pt")
         imgs = torch.unbind(imgs, 1) # imgs is a tuple of neighbor imgs [batch_size, 3, H, W], length N
         intrinsics = torch.unbind(intrinsics, 1)
         extrinsics = torch.unbind(extrinsics, 1)
         features = [self.FeatureExtractor(i) for i in imgs]
         nviews = len(imgs)
-        print("self.training: {}".format(self.training))
 
         # # step 2. differentiable homograph, build cost volume
         # volume_variance = homography_mapping(features, extrinsics, intrinsics, depth_values, nviews)
@@ -304,17 +302,17 @@ class MVSVolume(pl.LightningModule):
         depth_map = depth_regression(probility_volume, depth_values).transpose(1, 2)
         # print(depth_map.shape)
         # print(depth_gt.shape)
-        print("depth_map.shape: {}".format(depth_map.shape))
         loss = F.smooth_l1_loss(depth_map[mask], depth_gt[mask], size_average=True) # TODO: what loss function is better ?
         self.logger.experiment.add_scalar("depth loss", loss, self.global_step)
         if self.global_step % 5 == 0:
-            print("imgs[0][0].shape: {}", imgs[0][0].shape)
-            torch.save(imgs[0][0], "imgs[0][0].pt")
             self.logger.experiment.add_image("reference image", imgs[0][0].transpose(1, 2), self.global_step )
             self.logger.experiment.add_image("depth_gt", depth_gt[0], self.global_step, dataformats="HW")
             self.logger.experiment.add_image("depth_map", (depth_map* mask)[0], self.global_step, dataformats="HW")
         return {
-            'loss': loss
+            'loss': loss,
+            'depth_map': depth_map,
+            'depth_gt': depth_gt,
+            'mask': mask
         }
     def training_epoch_end(self, outputs):
         avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
@@ -326,6 +324,20 @@ class MVSVolume(pl.LightningModule):
         pass
     def test_step():
         pass
+    def predict_step(self, batch, batch_idx, dataloader_idx):
+        imgs, intrinsics, extrinsics, proj_matrices, depth_gt, depth_values, mask= list(tocuda(batch).values())
+        imgs = torch.unbind(imgs, 1) # imgs is a tuple of neighbor imgs [batch_size, 3, H, W], length N
+        result = self.training_step(batch, batch_idx)
+        loss, depth_map, depth_gt, mask = result['loss'], result['depth_map'], result['depth_gt'], result['mask']
+        print("batch_idx = {}".format(batch_idx))
+        if batch_idx % 5 == 0:
+            print("True")
+            self.logger.experiment.add_scalar("test/rdepth loss", loss, batch_idx)
+            self.logger.experiment.add_image("test/reference image", imgs[0][0].transpose(1, 2), batch_idx )
+            self.logger.experiment.add_image("test/depth_gt", depth_gt[0], batch_idx, dataformats="HW")
+            self.logger.experiment.add_image("test/depth_map", (depth_map* mask)[0], batch_idx, dataformats="HW")
+        return None
+        
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
