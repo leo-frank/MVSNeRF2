@@ -345,5 +345,5 @@ if __name__ == '__main__':
     with torch.autograd.set_detect_anomaly(True):
         # imgs, intrinsics, extrinsics, ref_depth = dataset[0]
         tensorboard = TensorBoardLogger(save_dir = "./tb_logs/")
-        trainer = pl.Trainer(logger=tensorboard, max_epochs=1, gpus=1)
+        trainer = pl.Trainer(logger=tensorboard, max_epochs=2, gpus=1)
         trainer.fit(model, train_dataloader=train_loader)
