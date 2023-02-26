@@ -303,17 +303,29 @@ class MVSVolume(pl.LightningModule):
         # print(depth_map.shape)
         # print(depth_gt.shape)
         loss = F.smooth_l1_loss(depth_map[mask], depth_gt[mask], size_average=True) # TODO: what loss function is better ?
-        self.logger.experiment.add_scalar("depth loss", loss, self.global_step)
+        self.logger.experiment.add_scalar("train/depth loss", loss, self.global_step)
         if self.global_step % 5 == 0:
-            self.logger.experiment.add_image("reference image", imgs[0][0].transpose(1, 2), self.global_step )
-            self.logger.experiment.add_image("depth_gt", depth_gt[0], self.global_step, dataformats="HW")
-            self.logger.experiment.add_image("depth_map", (depth_map* mask)[0], self.global_step, dataformats="HW")
+            thres2mm_error = self.Thres_metrics(depth_map, depth_gt, mask > 0.5, 2)
+            thres4mm_error = self.Thres_metrics(depth_map, depth_gt, mask > 0.5, 4)
+            thres8mm_error = self.Thres_metrics(depth_map, depth_gt, mask > 0.5, 8)
+            self.logger.experiment.add_scalar("train/thres2mm_error", thres2mm_error, self.global_step)
+            self.logger.experiment.add_scalar("train/thres4mm_error", thres4mm_error, self.global_step)
+            self.logger.experiment.add_scalar("train/thres8mm_error", thres8mm_error, self.global_step)
+            self.logger.experiment.add_image("train/reference image", imgs[0][0].transpose(1, 2), self.global_step )
+            self.logger.experiment.add_image("train/depth_gt", depth_gt[0], self.global_step, dataformats="HW")
+            self.logger.experiment.add_image("train/depth_map", (depth_map* mask)[0], self.global_step, dataformats="HW")
         return {
             'loss': loss,
             'depth_map': depth_map,
             'depth_gt': depth_gt,
             'mask': mask
         }
+    def Thres_metrics(self, depth_est, depth_gt, mask, thres):
+        assert isinstance(thres, (int, float))
+        depth_est, depth_gt = depth_est[mask], depth_gt[mask]
+        errors = torch.abs(depth_est - depth_gt)
+        err_mask = errors > thres
+        return torch.mean(err_mask.float())
     def training_epoch_end(self, outputs):
         avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
         self.logger.experiment.add_scalar('average loss per epoch', avg_loss, self.current_epoch)
