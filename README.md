@@ -1,2 +1,5 @@
-# mvsnet2
-self implementing mvsnet with pytorch-lightning
+# MVS + Nerf
+Combine MVS & Nerf together
+
+## Update:
+* MVSNet release [Mar 10, 2022]
