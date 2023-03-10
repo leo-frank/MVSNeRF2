@@ -44,6 +44,35 @@ def read_pfm(filename):
     file.close()
     return data, scale
 
+def save_pfm(filename, image, scale=1):
+    file = open(filename, "wb")
+    color = None
+
+    image = np.flipud(image)
+
+    if image.dtype.name != 'float32':
+        raise Exception('Image dtype must be float32.')
+
+    if len(image.shape) == 3 and image.shape[2] == 3:  # color image
+        color = True
+    elif len(image.shape) == 2 or len(image.shape) == 3 and image.shape[2] == 1:  # greyscale
+        color = False
+    else:
+        raise Exception('Image must have H x W x 3, H x W x 1 or H x W dimensions.')
+
+    file.write('PF\n'.encode('utf-8') if color else 'Pf\n'.encode('utf-8'))
+    file.write('{} {}\n'.format(image.shape[1], image.shape[0]).encode('utf-8'))
+
+    endian = image.dtype.byteorder
+
+    if endian == '<' or endian == '=' and sys.byteorder == 'little':
+        scale = -scale
+
+    file.write(('%f\n' % scale).encode('utf-8'))
+
+    image.tofile(file)
+    file.close()
+
 
 # convert a function into recursive style to handle nested dict/list/tuple variables
 def make_recursive_func(func):
@@ -70,3 +99,12 @@ def tocuda(vars):
         raise NotImplementedError(
             "invalid input type {} for tensor2numpy".format(type(vars))
         )
+
+@make_recursive_func
+def tensor2numpy(vars):
+    if isinstance(vars, np.ndarray):
+        return vars
+    elif isinstance(vars, torch.Tensor):
+        return vars.detach().cpu().numpy().copy()
+    else:
+        raise NotImplementedError("invalid input type {} for tensor2numpy".format(type(vars)))

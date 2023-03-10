@@ -190,7 +190,7 @@ class MVSVolume(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.FeatureExtractor = FeatureExtractor()
-        self.RegularizeVolume = CostRegNet()
+        self.VolumeReg = CostRegNet()
         self.training = True
 
     def build_volume(self, features, proj_matrices, depth_values):
@@ -218,15 +218,7 @@ class MVSVolume(pl.LightningModule):
         # aggregate multiple feature volumes by variance
         volume_variance = volume_sq_sum / (num_views) - (volume_sum / num_views).pow(2)
         return volume_variance
-
-    """
-    batch consists of these:
-      imgs: [batch_size, nviews, 3, 640, 512]
-      intrinsics: [batch_size, nviews, 3, 3]
-      extrinsics: [batch_size, nviews, 3, 3]
-      depth_gt: [batch_size, 160, 128]
-    """
-    def training_step(self, batch, batch_idx):
+    def forward(self, batch):
         (
             imgs,
             intrinsics,
@@ -245,9 +237,30 @@ class MVSVolume(pl.LightningModule):
         features = [self.FeatureExtractor(i) for i in imgs]
         volume_variance = self.build_volume(features, proj_matrices, depth_values)
         probility_volume = F.softmax(
-            self.RegularizeVolume(volume_variance).squeeze(1), dim=1
+            self.VolumeReg(volume_variance).squeeze(1), dim=1
         )
         depth_map = depth_regression(probility_volume, depth_values).transpose(1, 2)
+        return {
+            "depth": depth_map,
+        }
+    """
+    batch consists of these:
+      imgs: [batch_size, nviews, 3, 640, 512]
+      intrinsics: [batch_size, nviews, 3, 3]
+      extrinsics: [batch_size, nviews, 3, 3]
+      depth_gt: [batch_size, 160, 128]
+    """
+    def training_step(self, batch, batch_idx):
+        (
+            imgs,
+            intrinsics,
+            extrinsics,
+            proj_matrices,
+            depth_gt,
+            depth_values,
+            mask,
+        ) = list(tocuda(batch).values())
+        depth_map = self(batch)['depth']
         loss = F.smooth_l1_loss(
             depth_map[mask], depth_gt[mask], size_average=True
         )  # TODO: select a better loss function
@@ -284,9 +297,6 @@ class MVSVolume(pl.LightningModule):
             )
         return {
             "loss": loss,
-            "depth_map": depth_map,
-            "depth_gt": depth_gt,
-            "mask": mask,
         }
 
     def Thres_metrics(self, depth_est, depth_gt, mask, thres):
@@ -327,13 +337,12 @@ class MVSVolume(pl.LightningModule):
         imgs = torch.unbind(
             imgs, 1
         )  # imgs is a tuple of neighbor imgs [batch_size, 3, H, W], length N
-        result = self.training_step(batch, batch_idx)
-        loss, depth_map, depth_gt, mask = (
-            result["loss"],
-            result["depth_map"],
-            result["depth_gt"],
-            result["mask"],
-        )
+        depth_map = self(batch)['depth']
+        loss = F.smooth_l1_loss(
+            depth_map[mask], depth_gt[mask], size_average=True
+        )  # TODO: select a better loss function
+
+        
         if batch_idx % 5 == 0:
             print("True")
             self.logger.experiment.add_scalar("test/rdepth loss", loss, batch_idx)
